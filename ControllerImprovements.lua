@@ -123,14 +123,16 @@ local function IsMerchantItemButton(button)
 	return false;
 end
 
-local function IsBagButton(button)
-	if not button or IsMerchantItemButton(button) then return false; end
-	return type(button.GetSlotAndBagID) == "function"
-		or (type(button.GetBagID) == "function" and type(button.GetID) == "function");
-end
-
 local function IsBankButton(button)
 	return button and type(button.GetBankTabID) == "function";
+end
+
+local function IsBagButton(button)
+	-- Bag item buttons only: GetSlotAndBagID identifies the container-button
+	-- mixin. Bank buttons also expose GetID, so the loose fallback would
+	-- misclassify them as bags — check bank first.
+	if not button or IsMerchantItemButton(button) or IsBankButton(button) then return false; end
+	return type(button.GetSlotAndBagID) == "function";
 end
 
 local function GetCandidates()
@@ -286,14 +288,14 @@ local function CI_DoX()
 	end
 	local name = button:GetName() or "?";
 	local ok, err;
-	if IsBagButton(button) then
-		local bag, slot;
-		if button.GetSlotAndBagID then
-			-- Returns slot, bag — order matters.
-			slot, bag = button:GetSlotAndBagID();
-		else
-			bag, slot = button:GetBagID(), button:GetID();
-		end
+	if IsBankButton(button) then
+		-- Withdraw (the camelot bank's own right-click call).
+		local tab, slot = button:GetBankTabID(), button:GetContainerSlotID();
+		ok, err = pcall(C_Container.UseContainerItem, tab, slot);
+		LogX("withdraw", name, ("tab=%s slot=%s"):format(tostring(tab), tostring(slot)));
+	elseif IsBagButton(button) then
+		-- Returns slot, bag — order matters.
+		local slot, bag = button:GetSlotAndBagID();
 		if not bag or not slot then
 			LogX("bag-itself", name, nil);
 			return;
@@ -310,11 +312,6 @@ local function CI_DoX()
 		else
 			LogX("bag-nocontext", name, nil);
 		end
-	elseif IsBankButton(button) then
-		-- Withdraw (the camelot bank's own right-click call).
-		local tab, slot = button:GetBankTabID(), button:GetContainerSlotID();
-		ok, err = pcall(C_Container.UseContainerItem, tab, slot);
-		LogX("withdraw", name, ("tab=%s slot=%s"):format(tostring(tab), tostring(slot)));
 	elseif IsMerchantItemButton(button) or (MerchantFrame and MerchantFrame:IsShown() and type(button.GetID) == "function") then
 		local index = button:GetID();
 		if index then

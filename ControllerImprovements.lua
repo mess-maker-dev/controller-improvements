@@ -81,9 +81,12 @@ end
 local function IsBagButton(button)
 	-- Bag item buttons only: GetSlotAndBagID identifies the container-button
 	-- mixin. Bank buttons also expose GetID, so the loose fallback would
-	-- misclassify them as bags — check bank first.
+	-- misclassify them as bags — check bank first. The bag-itself icons have
+	-- the method too but return a nil bag; exclude them.
 	if not button or IsMerchantItemButton(button) or IsBankButton(button) then return false; end
-	return type(button.GetSlotAndBagID) == "function";
+	if type(button.GetSlotAndBagID) ~= "function" then return false; end
+	local ok, slot, bag = pcall(button.GetSlotAndBagID, button);
+	return ok and bag ~= nil;
 end
 
 local function GetCandidates()
@@ -350,24 +353,28 @@ local function BridgeAcross(dxSign)
 		end
 	end
 	local cy = GetCenterY(button);
-	local target, bestDist;
+	local target, bestDist, targetCx, targetCy;
 	for _, b in ipairs(candidates) do
 		if IsBagButton(b) ~= IsBagButton(button) then  -- opposite side
 			local bx = (b:GetLeft() + b:GetRight()) / 2;
 			local dx = bx - cx;
 			if (dxSign > 0 and dx > 10) or (dxSign < 0 and dx < -10) then
-				local d = math.abs(dx) + math.abs(GetCenterY(b) - cy) * 2;
+				-- Row-first: at ~600px separation the horizontal spread of a
+				-- 4-column grid dwarfs row deltas, so vertical distance must
+				-- dominate or the target row is effectively random.
+				local d = math.abs(GetCenterY(b) - cy) * 10 + math.abs(dx);
 				if not bestDist or d < bestDist then
-					target, bestDist = b, d;
+					target, bestDist, targetCx, targetCy = b, d, bx, GetCenterY(b);
 				end
 			end
 		end
 	end
 	if target then
 		SelectButton(target);
-		LogBridge(dxSign, "crossed", target:GetName() or "?");
+		LogBridge(dxSign, "crossed", ("from=(%d,%d) to=(%d,%d) dist=%.1f name=%s"):format(
+			cx, cy, targetCx, targetCy, bestDist, target:GetName() or "?"));
 	else
-		LogBridge(dxSign, "notarget", #candidates);
+		LogBridge(dxSign, "notarget", ("candidates=%d from=(%d,%d)"):format(#candidates, cx, cy));
 	end
 end
 

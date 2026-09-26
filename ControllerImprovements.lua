@@ -414,19 +414,28 @@ end
 
 local wasActive = false;
 local lastFocusSide = nil;
+local clearAt = nil;  -- deferred binding-clear time (outside the close hot window)
 local poller = CreateFrame("Frame");
 poller.elapsed = 0;
 poller:SetScript("OnUpdate", function(self, elapsed)
 	local active = InputUtil.IsGamepadUIEnabled() and IsInteractionShown();
 	if active and not wasActive then
+		clearAt = nil;  -- re-opened before the deferred clear fired
 		BindControls();
 		PlaceWindow();
 		CI_UpdatePrompt();
 	elseif not active and wasActive then
-		ClearBindings();
+		-- Clearing bindings during the interaction-teardown window schedules the
+		-- interact-icon update inside our tainted chain (blocked popup). Defer
+		-- until the chain has fully settled.
+		clearAt = GetTime() + 1.5;
 		overlay:Hide();
 	end
 	wasActive = active;
+	if clearAt and not active and GetTime() >= clearAt then
+		ClearBindings();
+		clearAt = nil;
+	end
 
 	if needsRebind and active then
 		BindControls();

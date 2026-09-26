@@ -124,7 +124,9 @@ local function IsMerchantItemButton(button)
 end
 
 local function IsBagButton(button)
-	return button and type(button.GetSlotAndBagID) == "function" and not IsMerchantItemButton(button);
+	if not button or IsMerchantItemButton(button) then return false; end
+	return type(button.GetSlotAndBagID) == "function"
+		or (type(button.GetBagID) == "function" and type(button.GetID) == "function");
 end
 
 local function IsBankButton(button)
@@ -133,14 +135,23 @@ end
 
 local function GetCandidates()
 	local out = {};
-	-- Bags
+	-- Bags: the camelot client uses the COMBINED bags frame; individual
+	-- ContainerFrame1..5 also exist for the classic layout.
+	local bagFrames = {};
 	for i = 1, 6 do
 		local bagFrame = _G["ContainerFrame" .. i];
 		if bagFrame and bagFrame:IsShown() then
-			local all = CollectShownButtons(bagFrame, {});
-			for _, b in ipairs(all) do
-				if IsBagButton(b) then out[#out + 1] = b; end
-			end
+			bagFrames[#bagFrames + 1] = bagFrame;
+		end
+	end
+	local combined = _G.ContainerFrameCombinedBags;
+	if combined and combined:IsShown() then
+		bagFrames[#bagFrames + 1] = combined;
+	end
+	for _, bagFrame in ipairs(bagFrames) do
+		local all = CollectShownButtons(bagFrame, {});
+		for _, b in ipairs(all) do
+			if IsBagButton(b) then out[#out + 1] = b; end
 		end
 	end
 	-- Bank
@@ -263,7 +274,12 @@ local function CI_DoX()
 	if not button then return; end
 	local ok, err;
 	if IsBagButton(button) then
-		local bag, slot = button:GetSlotAndBagID();
+		local bag, slot;
+		if button.GetSlotAndBagID then
+			bag, slot = button:GetSlotAndBagID();
+		else
+			bag, slot = button:GetBagID(), button:GetID();
+		end
 		if MerchantFrame and MerchantFrame:IsShown() then
 			-- Sell: the engine routes UseContainerItem to sell while the
 			-- merchant interaction is open (Inked's Sell From Bags call).

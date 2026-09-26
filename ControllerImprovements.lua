@@ -272,7 +272,8 @@ local function CI_UpdatePrompt()
 end
 
 ------------------------------------------------------------
--- Window placement: nudge the bank/vendor right so both sides sit together
+-- Window placement: WE own the layout. Bags pinned left, bank/vendor pinned
+-- right — the crossing directions are fixed by design, not measured.
 ------------------------------------------------------------
 
 local function PlaceWindow()
@@ -288,6 +289,34 @@ local function PlaceWindow()
 		frame.ciPlaced = true;
 		frame:ClearAllPoints();
 		frame:SetPoint("CENTER", UIParent, "CENTER", 160, 0);
+	end
+	local combined = _G.ContainerFrameCombinedBags;
+	if combined and combined:IsShown() and not combined.ciPlaced then
+		combined.ciPlaced = true;
+		combined:ClearAllPoints();
+		combined:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -170, 0);
+	end
+end
+
+-- Cached layout model: rightmost bag X and leftmost bank/merchant X,
+-- recomputed on the slow tick (frames can resize).
+local layoutBagsRight = nil;
+local layoutOtherLeft = nil;
+
+local function CI_UpdateLayout()
+	layoutBagsRight = nil;
+	layoutOtherLeft = nil;
+	for _, b in ipairs(GetCandidates()) do
+		local x = (b:GetLeft() + b:GetRight()) / 2;
+		if IsBagButton(b) then
+			if not layoutBagsRight or x > layoutBagsRight then
+				layoutBagsRight = x;
+			end
+		else
+			if not layoutOtherLeft or x < layoutOtherLeft then
+				layoutOtherLeft = x;
+			end
+		end
 	end
 end
 
@@ -333,48 +362,42 @@ local function BridgeAcross(dxSign)
 		LogBridge(dxSign, "nofocus", nil);
 		return;
 	end
-	local isItem = IsBagButton(button) or IsBankButton(button)
+	local isBag = IsBagButton(button);
+	local isOther = IsBankButton(button)
 		or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button));
-	if not isItem then
+	if not (isBag or isOther) then
 		LogBridge(dxSign, "notitem", button:GetName() or "?");
 		return;
 	end
-	local candidates = GetCandidates();
+	-- Fixed model: bags LEFT, bank/vendor RIGHT. RIGHT crosses bags->bank,
+	-- LEFT crosses bank->bags. Any other direction is a no-op.
+	if (dxSign > 0) ~= isBag then
+		return;
+	end
 	local cx = (button:GetLeft() + button:GetRight()) / 2;
-	-- Edge check: no same-side candidate further in the pressed direction.
-	for _, b in ipairs(candidates) do
-		if IsBagButton(b) == IsBagButton(button) then
-			local x = (b:GetLeft() + b:GetRight()) / 2;
-			local dx = x - cx;
-			if (dxSign > 0 and dx > 10) or (dxSign < 0 and dx < -10) then
-				LogBridge(dxSign, "notedge", #candidates);
-				return;
-			end
-		end
+	-- Edge check against the cached layout model.
+	if isBag then
+		if not layoutBagsRight or cx < layoutBagsRight - 20 then return; end
+	else
+		if not layoutOtherLeft or cx > layoutOtherLeft + 20 then return; end
 	end
 	local cy = GetCenterY(button);
-	local target, bestDist, targetCx, targetCy;
-	for _, b in ipairs(candidates) do
-		if IsBagButton(b) ~= IsBagButton(button) then  -- opposite side
-			local bx = (b:GetLeft() + b:GetRight()) / 2;
-			local dx = bx - cx;
-			if (dxSign > 0 and dx > 10) or (dxSign < 0 and dx < -10) then
-				-- Row-first: at ~600px separation the horizontal spread of a
-				-- 4-column grid dwarfs row deltas, so vertical distance must
-				-- dominate or the target row is effectively random.
-				local d = math.abs(GetCenterY(b) - cy) * 10 + math.abs(dx);
-				if not bestDist or d < bestDist then
-					target, bestDist, targetCx, targetCy = b, d, bx, GetCenterY(b);
-				end
+	local target, bestDist;
+	for _, b in ipairs(GetCandidates()) do
+		if IsBagButton(b) ~= isBag then  -- opposite side
+			local by = GetCenterY(b);
+			-- Row-first metric.
+			local d = math.abs(by - cy) * 10 + math.abs((b:GetLeft() + b:GetRight()) / 2 - cx);
+			if not bestDist or d < bestDist then
+				target, bestDist = b, d;
 			end
 		end
 	end
 	if target then
 		SelectButton(target);
-		LogBridge(dxSign, "crossed", ("from=(%d,%d) to=(%d,%d) dist=%.1f name=%s"):format(
-			cx, cy, targetCx, targetCy, bestDist, target:GetName() or "?"));
+		LogBridge(dxSign, "crossed", ("row=%.1f name=%s"):format(GetCenterY(target), target:GetName() or "?"));
 	else
-		LogBridge(dxSign, "notarget", ("candidates=%d from=(%d,%d)"):format(#candidates, cx, cy));
+		LogBridge(dxSign, "notarget", ("candidates=%d cx=%d"):format(#GetCandidates(), cx));
 	end
 end
 
@@ -427,6 +450,7 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 	if self.elapsed < 0.2 then return; end
 	self.elapsed = 0;
 	if active then
+		CI_UpdateLayout();
 		CI_UpdatePrompt();
 	end
 end);

@@ -348,7 +348,8 @@ end
 local function LogBridge(dxSign, stage, detail)
 	local log = ControllerImprovementsDB.BridgeLog or {};
 	ControllerImprovementsDB.BridgeLog = log;
-	table.insert(log, { dir = dxSign > 0 and "RIGHT" or "LEFT", stage = stage, detail = detail, gameTime = GetTime() });
+	local dirName = type(dxSign) == "number" and (dxSign > 0 and "RIGHT" or "LEFT") or tostring(dxSign);
+	table.insert(log, { dir = dirName, stage = stage, detail = detail, gameTime = GetTime() });
 	while #log > 12 do
 		table.remove(log, 1);
 	end

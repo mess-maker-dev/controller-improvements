@@ -295,16 +295,6 @@ end
 -- Cross-gap bridges: the native nav handles movement WITHIN each side (bags
 -- are natively navigable); we only intercept edge presses that should cross
 -- the gap. Polled — no bindings.
-local function IsAtRightEdge(button)
-	local parent = button:GetParent();
-	return parent and button:GetRight() >= parent:GetRight() - 3;
-end
-
-local function IsAtLeftEdge(button)
-	local parent = button:GetParent();
-	return parent and button:GetLeft() <= parent:GetLeft() + 3;
-end
-
 local function GetCenterY(frame)
 	return (frame:GetTop() + frame:GetBottom()) / 2;
 end
@@ -321,21 +311,47 @@ local function FindClosestByY(buttons, y)
 end
 
 -- Cross the gap in direction dxSign (+1 = RIGHT, -1 = LEFT): fire only from
--- an edge button of either side, and jump to the nearest item button of the
--- OTHER side that lies in the pressed direction. Works regardless of whether
--- the bank/vendor sits left or right of the bags.
+-- an edge button of either side (no same-side button further in that
+-- direction — frame edges are unreliable here), and jump to the nearest item
+-- button of the OTHER side in the pressed direction. Works regardless of
+-- whether the bank/vendor sits left or right of the bags.
+local function LogBridge(dxSign, stage, detail)
+	local log = ControllerImprovementsDB.BridgeLog or {};
+	ControllerImprovementsDB.BridgeLog = log;
+	table.insert(log, { dir = dxSign > 0 and "RIGHT" or "LEFT", stage = stage, detail = detail, gameTime = GetTime() });
+	while #log > 12 do
+		table.remove(log, 1);
+	end
+end
+
 local function BridgeAcross(dxSign)
 	local button = GetCurrentButton();
-	if not button then return; end
+	if not button then
+		LogBridge(dxSign, "nofocus", nil);
+		return;
+	end
 	local isItem = IsBagButton(button) or IsBankButton(button)
 		or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button));
-	if not isItem then return; end
-	if dxSign > 0 and not IsAtRightEdge(button) then return; end
-	if dxSign < 0 and not IsAtLeftEdge(button) then return; end
+	if not isItem then
+		LogBridge(dxSign, "notitem", button:GetName() or "?");
+		return;
+	end
+	local candidates = GetCandidates();
 	local cx = (button:GetLeft() + button:GetRight()) / 2;
+	-- Edge check: no same-side candidate further in the pressed direction.
+	for _, b in ipairs(candidates) do
+		if IsBagButton(b) == IsBagButton(button) then
+			local x = (b:GetLeft() + b:GetRight()) / 2;
+			local dx = x - cx;
+			if (dxSign > 0 and dx > 10) or (dxSign < 0 and dx < -10) then
+				LogBridge(dxSign, "notedge", #candidates);
+				return;
+			end
+		end
+	end
 	local cy = GetCenterY(button);
 	local target, bestDist;
-	for _, b in ipairs(GetCandidates()) do
+	for _, b in ipairs(candidates) do
 		if IsBagButton(b) ~= IsBagButton(button) then  -- opposite side
 			local bx = (b:GetLeft() + b:GetRight()) / 2;
 			local dx = bx - cx;
@@ -349,6 +365,9 @@ local function BridgeAcross(dxSign)
 	end
 	if target then
 		SelectButton(target);
+		LogBridge(dxSign, "crossed", target:GetName() or "?");
+	else
+		LogBridge(dxSign, "notarget", #candidates);
 	end
 end
 

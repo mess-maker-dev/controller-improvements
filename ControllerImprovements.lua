@@ -269,39 +269,71 @@ end
 -- X: one-press move
 ------------------------------------------------------------
 
+local function LogX(kind, name, detail)
+	local log = ControllerImprovementsDB.XLog or {};
+	ControllerImprovementsDB.XLog = log;
+	table.insert(log, { kind = kind, name = name, detail = detail, gameTime = GetTime() });
+	while #log > 8 do
+		table.remove(log, 1);
+	end
+end
+
 local function CI_DoX()
 	local button = GetCurrentButton();
-	if not button then return; end
+	if not button then
+		LogX("nofocus", nil, nil);
+		return;
+	end
+	local name = button:GetName() or "?";
 	local ok, err;
 	if IsBagButton(button) then
 		local bag, slot;
 		if button.GetSlotAndBagID then
-			bag, slot = button:GetSlotAndBagID();
+			-- Returns slot, bag — order matters.
+			slot, bag = button:GetSlotAndBagID();
 		else
 			bag, slot = button:GetBagID(), button:GetID();
+		end
+		if not bag or not slot then
+			LogX("bag-itself", name, nil);
+			return;
 		end
 		if MerchantFrame and MerchantFrame:IsShown() then
 			-- Sell: the engine routes UseContainerItem to sell while the
 			-- merchant interaction is open (Inked's Sell From Bags call).
 			ok, err = pcall(C_Container.UseContainerItem, bag, slot);
+			LogX("sell", name, ("bag=%s slot=%s"):format(tostring(bag), tostring(slot)));
 		elseif BankFrame and BankFrame:IsShown() then
 			local bankType = Enum.BankType and Enum.BankType.Character or nil;
 			ok, err = pcall(C_Container.UseContainerItem, bag, slot, nil, bankType, false);
+			LogX("deposit", name, ("bag=%s slot=%s"):format(tostring(bag), tostring(slot)));
+		else
+			LogX("bag-nocontext", name, nil);
 		end
 	elseif IsBankButton(button) then
 		-- Withdraw (the camelot bank's own right-click call).
-		ok, err = pcall(C_Container.UseContainerItem, button:GetBankTabID(), button:GetContainerSlotID());
+		local tab, slot = button:GetBankTabID(), button:GetContainerSlotID();
+		ok, err = pcall(C_Container.UseContainerItem, tab, slot);
+		LogX("withdraw", name, ("tab=%s slot=%s"):format(tostring(tab), tostring(slot)));
 	elseif IsMerchantItemButton(button) or (MerchantFrame and MerchantFrame:IsShown() and type(button.GetID) == "function") then
 		local index = button:GetID();
 		if index then
 			if MerchantFrame.selectedTab == 2 then
 				if BuybackItem then
 					ok, err = pcall(BuybackItem, index);
+					LogX("buyback", name, ("index=%s"):format(tostring(index)));
+				else
+					LogX("buyback-nofn", name, nil);
 				end
 			elseif BuyMerchantItem then
 				ok, err = pcall(BuyMerchantItem, index);
+				LogX("buy", name, ("index=%s"):format(tostring(index)));
+			else
+				LogX("buy-nofn", name, nil);
 			end
 		end
+	else
+		LogX("unclassified", name, nil);
 	end
 	if not ok and err then
 		ControllerImprovementsDB.LastError = { action = "X", error = err, time = time() };
@@ -384,6 +416,7 @@ end
 ------------------------------------------------------------
 
 local wasActive = false;
+local lastFocusSide = nil;
 local poller = CreateFrame("Frame");
 poller.elapsed = 0;
 poller:SetScript("OnUpdate", function(self, elapsed)
@@ -408,6 +441,18 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 	if self.elapsed < 0.2 then return; end
 	self.elapsed = 0;
 	if active then
+		-- The native bank UI binds PAD3 for its own contextual actions and
+		-- wins precedence when its panel is focused. Re-bind once whenever the
+		-- focused side changes (re-binding every tick triggered the blocked
+		-- popup before).
+		local current = GetCurrentButton();
+		local side = current and (IsBagButton(current) and "bags"
+			or IsBankButton(current) and "bank"
+			or (MerchantFrame and MerchantFrame:IsShown()) and "merchant") or "other";
+		if side ~= lastFocusSide then
+			lastFocusSide = side;
+			BindControls();
+		end
 		CI_UpdatePrompt();
 	end
 end);

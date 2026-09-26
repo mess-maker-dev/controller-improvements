@@ -1,40 +1,37 @@
 # Controller Improvements
 
-WoW addon for controller/gamepad tweaks in WoW Forever.
+WoW addon for controller/gamepad tweaks in WoW Forever (interface 16001).
 
-## Status: parked (beta restriction)
+## What it does (overlay mode)
 
-The combined bank/vendor panel is implemented and functional in structure, but
-**disabled by default**. On the WoW Forever beta (client 1.60.1.70009, interface
-16001), any addon modification of the native bank/vendor windows taints the
-gamepad interact-update chain; the client then shows the "blocked from an
-action only available to the Blizzard UI" popup (whose dismissal also freezes
-the client on this beta) for the rest of the session. This persisted across
-every input approach tried:
+While a bank or vendor window is open with a gamepad, pressing **X** performs
+a one-press move on the focused slot:
 
-- prompted-binding footer / override binding groups (Blizzard's GamepadSharedUtility)
-- plain `SetBindingClick`/`SetBinding`
-- direct `C_GamePad.GetDeviceMappedState` polling (current implementation)
-- hiding/suppressing/parenting the native windows every which way
+- bag item + bank open → **Deposit**
+- bank slot → **Withdraw**
+- bag item + vendor open → **Sell**
+- merchant item → **Buy** (buyback tab → **Buy Back**)
 
-The blocked function is always Blizzard's `SetPreferredGamepadInteractTarget`
-via the gamepad action bar — chains that contain zero addon code still get
-blocked, which points at beta-side restriction/taint interplay rather than
-anything in the addon. Known beta context: ABXY bindings are locked in the
-beta, and the beta has a SavedVariables-writing bug.
+A prompt line under the windows shows what X will do. Navigation (D-pad/A/B)
+is the client's native gamepad UI, untouched.
 
-The beta hotfixes nightly — revisit when it stabilizes. Enable with `/ci enable`
-(or set `EnableTakeover = true`), disable with `/ci disable`.
+## Why overlay mode
 
-## What's built
+The original design replaced the native windows with a combined panel. On the
+Forever beta, any addon modification of the native bank/vendor windows taints
+the gamepad interact-update chain, and the client then shows the "blocked from
+an action only available to the Blizzard UI" popup (dismissing it freezes the
+client) for the rest of the session. This persisted across every input approach
+(footer bindings, override bindings, plain bindings, direct controller polling)
+and with zero addon code in the triggering chain.
 
-- `ControllerImprovements.lua` — combined bank/vendor panel: bags left,
-  bank/vendor right, D-pad navigation via Blizzard SmartNavigation, A
-  pick-up/place, X deposit/withdraw/sell/buy (polled directly from the
-  controller state — no binding calls), B close via a Blizzard-scripted close
-  button with the native window closing through child-hide propagation.
-- `CIItemButton.lua` — item button mixin (bag/bank/merchant/buyback).
-- `/ci probe` / `/ci blocktest` — runtime diagnostics (SavedVariables).
+The working pattern was found in the [Inked](https://www.curseforge.com/wow/addons/inked)
+addon: enhance the native windows from the outside — display-only overlay,
+read-only SmartNavigation access, engine item-move calls, no window management.
+This build follows that architecture exactly.
+
+Next step (from Inked's playbook): D-pad bridges across the bag/bank gap so
+navigation moves side-to-side without LT/RT window cycling.
 
 ## Install
 
@@ -42,4 +39,7 @@ Copy this repo into WoW Forever's `Interface/AddOns/ControllerImprovements`
 (folder name must match the `.toc`). Symlinks/junctions do NOT work — the beta
 client's addon scanner skips reparse points. Use `sync-to-game.sh` after edits.
 
-Built against the WoW Forever interface (16001) — the retail 12.x addon API, vanilla content.
+## Debug
+
+- `/ci probe` — runtime API dump (SavedVariables; `/reload` to flush)
+- `/ci blocktest` — fire binding calls one at a time to see which get blocked

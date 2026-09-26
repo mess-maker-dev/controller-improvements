@@ -1,10 +1,8 @@
 ## Interface: 16001
 ## Title: Controller Improvements
-## Notes: Combined bank/vendor gamepad UI for WoW Forever
+## Notes: One-press bank/vendor moves for gamepad (overlay mode)
 ## Author: robth
 ## Version: 1.0.0
 ## SavedVariables: ControllerImprovementsDB
 
-CIItemButton.lua
 ControllerImprovements.lua
-ControllerImprovements.xml

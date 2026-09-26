@@ -5,5 +5,5 @@
 set -e
 DEST="/mnt/c/Program Files (x86)/World of Warcraft/_classic_beta_/Interface/AddOns/ControllerImprovements"
 mkdir -p "$DEST"
-cp ControllerImprovements.lua CIItemButton.lua ControllerImprovements.xml ControllerImprovements.toc "$DEST/"
+cp ControllerImprovements.lua ControllerImprovements.toc "$DEST/"
 echo "synced to $DEST"

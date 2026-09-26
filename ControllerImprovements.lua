@@ -18,6 +18,7 @@
 
 ControllerImprovementsDB = ControllerImprovementsDB or {};
 ControllerImprovementsDB.LastForbidden = nil; -- fresh state per reload
+ControllerImprovementsDB.LoadedAt = GetTime(); -- proves this code loaded
 
 -- The "blocked from an action only available to the Blizzard UI" popup does
 -- not name the function; the ADDON_ACTION_FORBIDDEN event does. Log it.
@@ -296,25 +297,24 @@ local function PlaceWindow()
 	-- repositioning it tainted the gamepad interact chain (blocked popup).
 end
 
--- Cached layout model: rightmost bag X and leftmost bank/merchant X,
--- recomputed on the slow tick (frames can resize).
-local layoutBagsRight = nil;
-local layoutOtherLeft = nil;
+-- Cached layout model: measured per session (frames can resize). The
+-- crossing direction derives from it — never assumed.
+local layoutBagsLeft, layoutBagsRight, layoutOtherLeft, layoutOtherRight, layoutOtherIsLeft;
 
 local function CI_UpdateLayout()
-	layoutBagsRight = nil;
-	layoutOtherLeft = nil;
+	layoutBagsLeft, layoutBagsRight, layoutOtherLeft, layoutOtherRight = nil, nil, nil, nil;
 	for _, b in ipairs(GetCandidates()) do
 		local x = (b:GetLeft() + b:GetRight()) / 2;
 		if IsBagButton(b) then
-			if not layoutBagsRight or x > layoutBagsRight then
-				layoutBagsRight = x;
-			end
+			if not layoutBagsLeft or x < layoutBagsLeft then layoutBagsLeft = x; end
+			if not layoutBagsRight or x > layoutBagsRight then layoutBagsRight = x; end
 		else
-			if not layoutOtherLeft or x < layoutOtherLeft then
-				layoutOtherLeft = x;
-			end
+			if not layoutOtherLeft or x < layoutOtherLeft then layoutOtherLeft = x; end
+			if not layoutOtherRight or x > layoutOtherRight then layoutOtherRight = x; end
 		end
+	end
+	if layoutOtherLeft and layoutBagsRight then
+		layoutOtherIsLeft = layoutOtherLeft < layoutBagsRight;
 	end
 end
 
@@ -378,9 +378,15 @@ end
 -- Geometric nav within the other side, from OUR tracked button (the native
 -- cursor may be anywhere; its position is not trustworthy here).
 local function NavOther(dxWanted, dyWanted)
-	if not ciOtherButton then return; end
+	if not ciOtherButton then
+		LogBridge(dxWanted ~= 0 and (dxWanted > 0 and "R" or "L") or (dyWanted > 0 and "D" or "U"), "nav-nobutton", nil);
+		return;
+	end
 	local cx, cy = FrameCenter(ciOtherButton);
-	if not cx then return; end
+	if not cx then
+		LogBridge("?", "nav-nocenter", nil);
+		return;
+	end
 	local best, bestScore;
 	for _, b in ipairs(OtherCandidates()) do
 		local x, y = FrameCenter(b);
@@ -411,6 +417,9 @@ local function NavOther(dxWanted, dyWanted)
 	if best then
 		ciOtherButton = best;
 		SelectButton(best);
+		LogBridge(dxWanted ~= 0 and (dxWanted > 0 and "R" or "L") or (dyWanted > 0 and "D" or "U"), "nav-moved", best:GetName() or "?");
+	else
+		LogBridge(dxWanted ~= 0 and (dxWanted > 0 and "R" or "L") or (dyWanted > 0 and "D" or "U"), "nav-notarget", nil);
 	end
 end
 
@@ -439,12 +448,30 @@ local function CrossBackToBags()
 	end
 end
 
--- Cross from the bags' right edge to the other side (row-first).
+-- Cross from the bags' near edge to the other side (row-first). The near
+-- edge and direction come from the measured model, not an assumption.
 local function CrossToOther()
+	if layoutOtherIsLeft == nil then
+		LogBridge("?", "no-model", nil);
+		return;
+	end
 	local button = GetCurrentButton();
-	if not IsBagButton(button) then return; end
+	if not button then
+		LogBridge("?", "no-focus", nil);
+		return;
+	end
+	if not IsBagButton(button) then
+		LogBridge("?", "not-bag", button:GetName() or "?");
+		return;
+	end
 	local cx = (button:GetLeft() + button:GetRight()) / 2;
-	if not layoutBagsRight or cx < layoutBagsRight - 20 then return; end
+	local atNearEdge = layoutOtherIsLeft and (cx <= layoutBagsLeft + 20)
+		or (not layoutOtherIsLeft and cx >= layoutBagsRight - 20);
+	if not atNearEdge then
+		LogBridge("?", "not-edge", ("cx=%d bagsLeft=%s bagsRight=%s otherIsLeft=%s"):format(
+			cx, tostring(layoutBagsLeft), tostring(layoutBagsRight), tostring(layoutOtherIsLeft)));
+		return;
+	end
 	local cy = GetCenterY(button);
 	local target, bestDist;
 	for _, b in ipairs(OtherCandidates()) do
@@ -457,7 +484,9 @@ local function CrossToOther()
 		ciSide = "other";
 		ciOtherButton = target;
 		SelectButton(target);
-		LogBridge(1, "crossed", target:GetName() or "?");
+		LogBridge("?", "crossed", target:GetName() or "?");
+	else
+		LogBridge("?", "no-target", ("otherCount=%d"):format(#OtherCandidates()));
 	end
 end
 
@@ -466,6 +495,7 @@ local prevButtons = {};
 local poller = CreateFrame("Frame");
 poller.elapsed = 0;
 poller:SetScript("OnUpdate", function(self, elapsed)
+	ControllerImprovementsDB.Ticks = (ControllerImprovementsDB.Ticks or 0) + 1;
 	local active = InputUtil.IsGamepadUIEnabled() and IsInteractionShown();
 	if active and not wasActive then
 		PlaceWindow();
@@ -493,21 +523,31 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 			end
 			if pressed("PADDRIGHT") then
 				if ciSide == "bags" then
-					CrossToOther();
+					if not layoutOtherIsLeft then
+						CrossToOther();
+					end
+					-- other side is left: RIGHT stays native within the bags
 				else
 					NavOther(1, 0);
 				end
 			end
 			if pressed("PADDLEFT") then
-				if ciSide == "other" then
+				if ciSide == "bags" then
+					if layoutOtherIsLeft then
+						CrossToOther();
+					end
+					-- other side is right: LEFT stays native within the bags
+				else
 					local cx = ciOtherButton and FrameCenter(ciOtherButton);
-					if cx and layoutOtherLeft and cx <= layoutOtherLeft + 20 then
+					local atNearEdge = cx and layoutOtherIsLeft
+						and (cx >= layoutOtherRight - 20)
+						or (cx and not layoutOtherIsLeft and cx <= layoutOtherLeft + 20);
+					if atNearEdge then
 						CrossBackToBags();
 					else
 						NavOther(-1, 0);
 					end
 				end
-				-- bags side: native nav owns LEFT
 			end
 			if pressed("PADDUP") then
 				if ciSide == "other" then
@@ -529,6 +569,16 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 		CI_UpdateLayout();
 		CI_UpdatePrompt();
 	end
+	-- Heartbeat: last-known poller state for diagnosis.
+	ControllerImprovementsDB.PollerState = {
+		gameTime = GetTime(),
+		active = active,
+		hasGamePad = not not (C_GamePad and C_GamePad.GetDeviceMappedState),
+		hasState = not not (C_GamePad and C_GamePad.GetDeviceMappedState and C_GamePad.GetDeviceMappedState()),
+		candidates = active and #GetCandidates() or nil,
+		layoutBagsRight = layoutBagsRight,
+		layoutOtherLeft = layoutOtherLeft,
+	};
 end);
 
 ------------------------------------------------------------

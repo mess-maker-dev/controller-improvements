@@ -292,12 +292,8 @@ local function PlaceWindow()
 		frame:ClearAllPoints();
 		frame:SetPoint("CENTER", UIParent, "CENTER", 160, 0);
 	end
-	local combined = _G.ContainerFrameCombinedBags;
-	if combined and combined:IsShown() and not combined.ciPlaced then
-		combined.ciPlaced = true;
-		combined:ClearAllPoints();
-		combined:SetPoint("BOTTOMRIGHT", UIParent, "CENTER", -170, 0);
-	end
+	-- The combined-bags frame is left where the native system puts it:
+	-- repositioning it tainted the gamepad interact chain (blocked popup).
 end
 
 -- Cached layout model: rightmost bag X and leftmost bank/merchant X,

@@ -193,9 +193,19 @@ local function FrameCenter(frame)
 	if ok then return x, y; end
 end
 
+local function LogNav(dir, from, to, count)
+	local log = ControllerImprovementsDB.NavLog or {};
+	ControllerImprovementsDB.NavLog = log;
+	table.insert(log, { dir = dir, from = from, to = to, candidates = count, gameTime = GetTime() });
+	while #log > 10 do
+		table.remove(log, 1);
+	end
+end
+
 local function Navigate(dxWanted, dyWanted)
 	local current = GetCurrentButton();
 	local candidates = GetCandidates();
+	local dirName = dxWanted > 0 and "RIGHT" or dxWanted < 0 and "LEFT" or dyWanted > 0 and "UP" or "DOWN";
 	if not current then
 		-- Nothing focused: pick the top-left-most candidate.
 		local best, bestX, bestY;
@@ -206,6 +216,7 @@ local function Navigate(dxWanted, dyWanted)
 			end
 		end
 		SelectButton(best);
+		LogNav(dirName, "none", best and (best:GetName() or "?") or nil, #candidates);
 		return;
 	end
 	local cx, cy = FrameCenter(current);
@@ -240,6 +251,7 @@ local function Navigate(dxWanted, dyWanted)
 		end
 	end
 	SelectButton(best);
+	LogNav(dirName, current:GetName() or "?", best and (best:GetName() or "?") or nil, #candidates);
 end
 
 ------------------------------------------------------------
@@ -380,6 +392,10 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 	if self.elapsed < 0.2 then return; end
 	self.elapsed = 0;
 	if active then
+		-- Re-bind every tick so our overrides stay the newest for their keys
+		-- and keep winning precedence over SmartNavigation's own D-pad group
+		-- (it re-activates on its own focus events).
+		BindControls();
 		CI_UpdatePrompt();
 	end
 end);
@@ -390,8 +406,9 @@ end);
 
 navLeft = CreateNavButton("CINavLeft", function() Navigate(-1, 0); end);
 navRight = CreateNavButton("CINavRight", function() Navigate(1, 0); end);
-navUp = CreateNavButton("CINavUp", function() Navigate(0, -1); end);
-navDown = CreateNavButton("CINavDown", function() Navigate(0, 1); end);
+-- Inked's convention: UP = +1, DOWN = -1 (gamepad coordinate space).
+navUp = CreateNavButton("CINavUp", function() Navigate(0, 1); end);
+navDown = CreateNavButton("CINavDown", function() Navigate(0, -1); end);
 actionX = CreateNavButton("CIActionX", function() CI_DoX(); end);
 
 ------------------------------------------------------------

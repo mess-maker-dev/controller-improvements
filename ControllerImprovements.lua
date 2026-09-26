@@ -37,60 +37,11 @@ forbiddenFrame:SetScript("OnEvent", function(_, event, addonName, funcName)
 	end
 end);
 
-------------------------------------------------------------
--- Input routing: hidden buttons + override bindings on our own manager frame
-------------------------------------------------------------
-
-local manager = CreateFrame("Frame", "CIManager", UIParent);
-manager:Hide();
-
-local function CreateNavButton(name, onClick)
-	local button = CreateFrame("Button", name, manager);
-	button:SetSize(1, 1);
-	button:SetAlpha(0);
-	button:SetPoint("CENTER");
-	button:RegisterForClicks("LeftButtonUp");
-	button:SetScript("OnClick", onClick);
-	return button;
-end
-
-local navLeft, navRight, navUp, navDown, actionX;
-local bindingsActive = false;
-local needsRebind = false;
-local needsClear = false;
-
-local function ClearBindings()
-	if InCombatLockdown and InCombatLockdown() then
-		needsClear = true;
-		return;
-	end
-	if ClearOverrideBindings then
-		pcall(ClearOverrideBindings, manager);
-	end
-	bindingsActive = false;
-	needsClear = false;
-end
-
-local function AddBinding(key, buttonName)
-	if not key or key == "" or not SetOverrideBindingClick then return false; end
-	return pcall(SetOverrideBindingClick, manager, true, key, buttonName, "LeftButton");
-end
-
-local function BindControls()
-	if InCombatLockdown and InCombatLockdown() then
-		needsRebind = true;
-		return;
-	end
-	ClearBindings();
-	AddBinding("PADDLEFT", "CINavLeft");
-	AddBinding("PADDRIGHT", "CINavRight");
-	AddBinding("PADDUP", "CINavUp");
-	AddBinding("PADDDOWN", "CINavDown");
-	AddBinding("PAD3", "CIActionX");
-	bindingsActive = true;
-	needsRebind = false;
-end
-
+-- Input: no binding calls at all. Mutating the binding system from addon code
+-- (SetOverrideBindingClick, SetBinding, ClearOverrideBindings — even Inked's
+-- raw form) taints the shared binding state on this beta; the blocked popup
+-- fires later, whenever the interact-icon update runs (close teardown, target
+-- changes). X and the cross-gap bridge are polled from the controller state.
 ------------------------------------------------------------
 -- Context detection and candidate collection
 ------------------------------------------------------------
@@ -194,77 +145,6 @@ local function SelectButton(button)
 	if SmartNavigation and SmartNavigation.SelectButton then
 		pcall(SmartNavigation.SelectButton, SmartNavigation, button);
 	end
-end
-
-------------------------------------------------------------
--- Geometric navigation over the candidate union (Inked's algorithm)
-------------------------------------------------------------
-
-local function FrameCenter(frame)
-	if not frame or not frame.GetCenter then return nil, nil; end
-	local ok, x, y = pcall(frame.GetCenter, frame);
-	if ok then return x, y; end
-end
-
-local function LogNav(dir, from, to, count)
-	local log = ControllerImprovementsDB.NavLog or {};
-	ControllerImprovementsDB.NavLog = log;
-	table.insert(log, { dir = dir, from = from, to = to, candidates = count, gameTime = GetTime() });
-	while #log > 10 do
-		table.remove(log, 1);
-	end
-end
-
-local function Navigate(dxWanted, dyWanted)
-	local current = GetCurrentButton();
-	local candidates = GetCandidates();
-	local dirName = dxWanted > 0 and "RIGHT" or dxWanted < 0 and "LEFT" or dyWanted > 0 and "UP" or "DOWN";
-	if not current then
-		-- Nothing focused: pick the top-left-most candidate.
-		local best, bestX, bestY;
-		for _, c in ipairs(candidates) do
-			local x, y = FrameCenter(c);
-			if x and (not bestX or y < bestY or (y == bestY and x < bestX)) then
-				best, bestX, bestY = c, x, y;
-			end
-		end
-		SelectButton(best);
-		LogNav(dirName, "none", best and (best:GetName() or "?") or nil, #candidates);
-		return;
-	end
-	local cx, cy = FrameCenter(current);
-	if not cx then return; end
-	local best, bestScore;
-	for _, candidate in ipairs(candidates) do
-		if candidate ~= current and candidate:IsShown() then
-			local x, y = FrameCenter(candidate);
-			if x and y then
-				local dx, dy = x - cx, y - cy;
-				local valid, primary, secondary;
-				if dxWanted > 0 then
-					valid = dx > 2;
-					primary, secondary = dx, math.abs(dy);
-				elseif dxWanted < 0 then
-					valid = dx < -2;
-					primary, secondary = -dx, math.abs(dy);
-				elseif dyWanted > 0 then
-					valid = dy > 2;
-					primary, secondary = dy, math.abs(dx);
-				else
-					valid = dy < -2;
-					primary, secondary = -dy, math.abs(dx);
-				end
-				if valid then
-					local score = primary + (secondary * 2.4);
-					if not bestScore or score < bestScore then
-						best, bestScore = candidate, score;
-					end
-				end
-			end
-		end
-	end
-	SelectButton(best);
-	LogNav(dirName, current:GetName() or "?", best and (best:GetName() or "?") or nil, #candidates);
 end
 
 ------------------------------------------------------------
@@ -412,67 +292,110 @@ end
 -- Context poller: activate/deactivate bindings, placement, prompt
 ------------------------------------------------------------
 
+-- Cross-gap bridges: the native nav handles movement WITHIN each side (bags
+-- are natively navigable); we only intercept edge presses that should cross
+-- the gap. Polled — no bindings.
+local function IsAtRightEdge(button)
+	local parent = button:GetParent();
+	return parent and button:GetRight() >= parent:GetRight() - 3;
+end
+
+local function IsAtLeftEdge(button)
+	local parent = button:GetParent();
+	return parent and button:GetLeft() <= parent:GetLeft() + 3;
+end
+
+local function GetCenterY(frame)
+	return (frame:GetTop() + frame:GetBottom()) / 2;
+end
+
+local function FindClosestByY(buttons, y)
+	local best, bestDist;
+	for _, b in ipairs(buttons) do
+		local d = math.abs(GetCenterY(b) - y);
+		if not bestDist or d < bestDist then
+			best, bestDist = b, d;
+		end
+	end
+	return best;
+end
+
+local function BridgeRight()
+	local button = GetCurrentButton();
+	if not IsBagButton(button) or not IsAtRightEdge(button) then return; end
+	local candidates = GetCandidates();
+	local target;
+	for _, b in ipairs(candidates) do
+		if IsBankButton(b) or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(b)) then
+			target = target and FindClosestByY({ target, b }, GetCenterY(button)) or b;
+		end
+	end
+	if target then
+		SelectButton(target);
+	end
+end
+
+local function BridgeLeft()
+	local button = GetCurrentButton();
+	if not (IsBankButton(button) or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button))) then
+		return;
+	end
+	if not IsAtLeftEdge(button) then return; end
+	local target;
+	for _, b in ipairs(GetCandidates()) do
+		if IsBagButton(b) then
+			target = target and FindClosestByY({ target, b }, GetCenterY(button)) or b;
+		end
+	end
+	if target then
+		SelectButton(target);
+	end
+end
+
 local wasActive = false;
-local lastFocusSide = nil;
-local clearAt = nil;  -- deferred binding-clear time (outside the close hot window)
+local prevButtons = {};
 local poller = CreateFrame("Frame");
 poller.elapsed = 0;
 poller:SetScript("OnUpdate", function(self, elapsed)
 	local active = InputUtil.IsGamepadUIEnabled() and IsInteractionShown();
 	if active and not wasActive then
-		clearAt = nil;  -- re-opened before the deferred clear fired
-		BindControls();
 		PlaceWindow();
 		CI_UpdatePrompt();
 	elseif not active and wasActive then
-		-- Clearing bindings during the interaction-teardown window schedules the
-		-- interact-icon update inside our tainted chain (blocked popup). Defer
-		-- until the chain has fully settled.
-		clearAt = GetTime() + 1.5;
 		overlay:Hide();
 	end
 	wasActive = active;
-	if clearAt and not active and GetTime() >= clearAt then
-		ClearBindings();
-		clearAt = nil;
-	end
 
-	if needsRebind and active then
-		BindControls();
-	elseif needsClear and not active then
-		ClearBindings();
+	if active and C_GamePad and C_GamePad.GetDeviceMappedState and C_GamePad.ButtonBindingToIndex then
+		local state = C_GamePad.GetDeviceMappedState();
+		if state and state.buttons then
+			local function pressed(key)
+				local index = C_GamePad.ButtonBindingToIndex(key);
+				if not index then return false; end
+				local down = state.buttons[index];
+				local wasDown = prevButtons[key];
+				prevButtons[key] = down;
+				return down and not wasDown;
+			end
+			if pressed("PAD3") then
+				CI_DoX();
+			end
+			if pressed("PADDRIGHT") then
+				BridgeRight();
+			end
+			if pressed("PADDLEFT") then
+				BridgeLeft();
+			end
+		end
 	end
 
 	self.elapsed = self.elapsed + elapsed;
 	if self.elapsed < 0.2 then return; end
 	self.elapsed = 0;
 	if active then
-		-- The native bank UI binds PAD3 for its own contextual actions and
-		-- wins precedence when its panel is focused. Re-bind once whenever the
-		-- focused side changes (re-binding every tick triggered the blocked
-		-- popup before).
-		local current = GetCurrentButton();
-		local side = current and (IsBagButton(current) and "bags"
-			or IsBankButton(current) and "bank"
-			or (MerchantFrame and MerchantFrame:IsShown()) and "merchant") or "other";
-		if side ~= lastFocusSide then
-			lastFocusSide = side;
-			BindControls();
-		end
 		CI_UpdatePrompt();
 	end
 end);
-
-------------------------------------------------------------
--- Wire the hidden buttons (created after their OnClick targets exist)
-------------------------------------------------------------
-
-navLeft = CreateNavButton("CINavLeft", function() Navigate(-1, 0); end);
-navRight = CreateNavButton("CINavRight", function() Navigate(1, 0); end);
--- Inked's convention: UP = +1, DOWN = -1 (gamepad coordinate space).
-navUp = CreateNavButton("CINavUp", function() Navigate(0, 1); end);
-navDown = CreateNavButton("CINavDown", function() Navigate(0, -1); end);
-actionX = CreateNavButton("CIActionX", function() CI_DoX(); end);
 
 ------------------------------------------------------------
 -- /ci debug commands

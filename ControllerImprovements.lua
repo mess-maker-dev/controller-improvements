@@ -320,14 +320,31 @@ local function FindClosestByY(buttons, y)
 	return best;
 end
 
-local function BridgeRight()
+-- Cross the gap in direction dxSign (+1 = RIGHT, -1 = LEFT): fire only from
+-- an edge button of either side, and jump to the nearest item button of the
+-- OTHER side that lies in the pressed direction. Works regardless of whether
+-- the bank/vendor sits left or right of the bags.
+local function BridgeAcross(dxSign)
 	local button = GetCurrentButton();
-	if not IsBagButton(button) or not IsAtRightEdge(button) then return; end
-	local candidates = GetCandidates();
-	local target;
-	for _, b in ipairs(candidates) do
-		if IsBankButton(b) or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(b)) then
-			target = target and FindClosestByY({ target, b }, GetCenterY(button)) or b;
+	if not button then return; end
+	local isItem = IsBagButton(button) or IsBankButton(button)
+		or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button));
+	if not isItem then return; end
+	if dxSign > 0 and not IsAtRightEdge(button) then return; end
+	if dxSign < 0 and not IsAtLeftEdge(button) then return; end
+	local cx = (button:GetLeft() + button:GetRight()) / 2;
+	local cy = GetCenterY(button);
+	local target, bestDist;
+	for _, b in ipairs(GetCandidates()) do
+		if IsBagButton(b) ~= IsBagButton(button) then  -- opposite side
+			local bx = (b:GetLeft() + b:GetRight()) / 2;
+			local dx = bx - cx;
+			if (dxSign > 0 and dx > 10) or (dxSign < 0 and dx < -10) then
+				local d = math.abs(dx) + math.abs(GetCenterY(b) - cy) * 2;
+				if not bestDist or d < bestDist then
+					target, bestDist = b, d;
+				end
+			end
 		end
 	end
 	if target then
@@ -335,21 +352,12 @@ local function BridgeRight()
 	end
 end
 
+local function BridgeRight()
+	BridgeAcross(1);
+end
+
 local function BridgeLeft()
-	local button = GetCurrentButton();
-	if not (IsBankButton(button) or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button))) then
-		return;
-	end
-	if not IsAtLeftEdge(button) then return; end
-	local target;
-	for _, b in ipairs(GetCandidates()) do
-		if IsBagButton(b) then
-			target = target and FindClosestByY({ target, b }, GetCenterY(button)) or b;
-		end
-	end
-	if target then
-		SelectButton(target);
-	end
+	BridgeAcross(-1);
 end
 
 local wasActive = false;

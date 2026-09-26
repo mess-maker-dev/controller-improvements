@@ -1,0 +1,7 @@
+## Interface: 120105
+## Title: Controller Improvements
+## Notes: Controller/gamepad tweaks for WoW Forever
+## Author: robth
+## Version: 1.0.0
+
+ControllerImprovements.lua

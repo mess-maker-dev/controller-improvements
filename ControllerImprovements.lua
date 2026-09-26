@@ -1,0 +1,2 @@
+-- ControllerImprovements
+-- Controller/gamepad tweaks for WoW Forever (retail 12.1.5 API)

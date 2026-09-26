@@ -392,10 +392,6 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 	if self.elapsed < 0.2 then return; end
 	self.elapsed = 0;
 	if active then
-		-- Re-bind every tick so our overrides stay the newest for their keys
-		-- and keep winning precedence over SmartNavigation's own D-pad group
-		-- (it re-activates on its own focus events).
-		BindControls();
 		CI_UpdatePrompt();
 	end
 end);
@@ -442,11 +438,17 @@ SlashCmdList.CONTROLLERIMPROVEMENTS = function(msg)
 	if msg == "probe" then
 		CI_Probe();
 	elseif msg == "nav" then
-		-- debug: dump candidate counts + current button
+		-- debug: dump candidate names + current button
 		local candidates = GetCandidates();
+		local names = {};
+		for i = 1, math.min(#candidates, 30) do
+			local c = candidates[i];
+			names[#names + 1] = c:GetName() or "?";
+		end
 		local current = GetCurrentButton();
 		ControllerImprovementsDB.NavDebug = {
 			candidates = #candidates,
+			names = names,
 			current = current and (current:GetName() or current:GetObjectType()) or nil,
 		};
 		print("CI nav:", #candidates, "candidates, current:", current and (current:GetName() or current:GetObjectType()) or "none");

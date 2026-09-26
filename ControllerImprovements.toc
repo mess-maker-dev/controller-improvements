@@ -1,7 +1,10 @@
-## Interface: 120105
+## Interface: 16001
 ## Title: Controller Improvements
-## Notes: Controller/gamepad tweaks for WoW Forever
+## Notes: Combined bank/vendor gamepad UI for WoW Forever
 ## Author: robth
 ## Version: 1.0.0
+## SavedVariables: ControllerImprovementsDB
 
+CIItemButton.lua
 ControllerImprovements.lua
+ControllerImprovements.xml

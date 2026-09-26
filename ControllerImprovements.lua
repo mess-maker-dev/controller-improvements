@@ -139,7 +139,118 @@ local function CI_UpdatePrompt()
 end
 
 ------------------------------------------------------------
--- Poller: X press detection (fast, every frame) + prompt (0.2s)
+-- D-pad bridges: cross the bag<->bank/vendor gap (no LT/RT cycling)
+-- RIGHT at a bag's right edge jumps to the bank/merchant side; LEFT back.
+-- Technique is Inked-proven: read-only SmartNavigation.SelectButton, buttons
+-- collected from the native frames by traversal.
+------------------------------------------------------------
+
+local function CollectShownButtons(frame, out, depth)
+	out = out or {};
+	depth = depth or 0;
+	if depth > 3 then return out; end
+	local children = { frame:GetChildren() };
+	for _, child in ipairs(children) do
+		if child:IsShown() and child:IsObjectType("Button") then
+			out[#out + 1] = child;
+		end
+		CollectShownButtons(child, out, depth + 1);
+	end
+	return out;
+end
+
+local function CollectBagButtons()
+	local out = {};
+	for i = 1, 6 do
+		local bagFrame = _G["ContainerFrame" .. i];
+		if bagFrame and bagFrame:IsShown() then
+			local all = CollectShownButtons(bagFrame, {});
+			for _, b in ipairs(all) do
+				if IsBagButton(b) then out[#out + 1] = b; end
+			end
+		end
+	end
+	return out;
+end
+
+local function CollectBankButtons()
+	local out = {};
+	if BankFrame and BankFrame:IsShown() then
+		local all = CollectShownButtons(BankFrame, {});
+		for _, b in ipairs(all) do
+			if IsBankButton(b) then out[#out + 1] = b; end
+		end
+	end
+	return out;
+end
+
+local function CollectMerchantButtons()
+	local out = {};
+	if MerchantFrame and MerchantFrame:IsShown() then
+		local all = CollectShownButtons(MerchantFrame, {});
+		for _, b in ipairs(all) do
+			if not IsBagButton(b) and not IsBankButton(b) and type(b.GetID) == "function" then
+				out[#out + 1] = b;
+			end
+		end
+	end
+	return out;
+end
+
+local function GetCenterY(frame)
+	return (frame:GetTop() + frame:GetBottom()) / 2;
+end
+
+local function FindClosestByY(buttons, y)
+	local best, bestDist;
+	for _, b in ipairs(buttons) do
+		local d = math.abs(GetCenterY(b) - y);
+		if not bestDist or d < bestDist then
+			best, bestDist = b, d;
+		end
+	end
+	return best;
+end
+
+local function IsAtRightEdge(button)
+	local parent = button:GetParent();
+	return parent and button:GetRight() >= parent:GetRight() - 3;
+end
+
+local function IsAtLeftEdge(button)
+	local parent = button:GetParent();
+	return parent and button:GetLeft() <= parent:GetLeft() + 3;
+end
+
+local function BridgeRight()
+	local button = SmartNavigation and SmartNavigation:GetCurrentButton() or nil;
+	if not IsBagButton(button) or not IsAtRightEdge(button) then return; end
+	local target;
+	if BankFrame and BankFrame:IsShown() then
+		target = FindClosestByY(CollectBankButtons(), GetCenterY(button));
+	elseif MerchantFrame and MerchantFrame:IsShown() then
+		target = FindClosestByY(CollectMerchantButtons(), GetCenterY(button));
+	end
+	if target then
+		pcall(SmartNavigation.SelectButton, SmartNavigation, target);
+	end
+end
+
+local function BridgeLeft()
+	local button = SmartNavigation and SmartNavigation:GetCurrentButton() or nil;
+	if not button then return; end
+	local isBank = IsBankButton(button);
+	local isMerchant = (not isBank) and (not IsBagButton(button))
+		and MerchantFrame and MerchantFrame:IsShown();
+	if not (isBank or isMerchant) or not IsAtLeftEdge(button) then return; end
+	local target = FindClosestByY(CollectBagButtons(), GetCenterY(button));
+	if target then
+		pcall(SmartNavigation.SelectButton, SmartNavigation, target);
+	end
+end
+
+------------------------------------------------------------
+-- Poller: X + D-pad detection (fast, every frame) + prompt (0.2s)
 ------------------------------------------------------------
 
 local prevButtons = {};
@@ -154,13 +265,22 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 	if visible and C_GamePad and C_GamePad.GetDeviceMappedState and C_GamePad.ButtonBindingToIndex then
 		local state = C_GamePad.GetDeviceMappedState();
 		if state and state.buttons then
-			local index = C_GamePad.ButtonBindingToIndex("PAD3");
-			if index then
+			local function pressed(key)
+				local index = C_GamePad.ButtonBindingToIndex(key);
+				if not index then return false; end
 				local down = state.buttons[index];
-				if down and not prevButtons.PAD3 then
-					CI_DoX();
-				end
-				prevButtons.PAD3 = down;
+				local wasDown = prevButtons[key];
+				prevButtons[key] = down;
+				return down and not wasDown;
+			end
+			if pressed("PAD3") then
+				CI_DoX();
+			end
+			if pressed("PADDRIGHT") then
+				BridgeRight();
+			end
+			if pressed("PADDLEFT") then
+				BridgeLeft();
 			end
 		end
 	end

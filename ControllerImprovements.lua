@@ -164,7 +164,9 @@ local function LogX(kind, name, detail)
 end
 
 local function CI_DoX()
-	local button = GetCurrentButton();
+	-- On the bank/vendor side use OUR tracked button — the native cursor
+	-- position is not trustworthy there.
+	local button = (ciSide == "other" and ciOtherButton) or GetCurrentButton();
 	if not button then
 		LogX("nofocus", nil, nil);
 		return;
@@ -247,7 +249,7 @@ local function CI_UpdatePrompt()
 		return;
 	end
 	overlay:Show();
-	local button = GetCurrentButton();
+	local button = (ciSide == "other" and ciOtherButton) or GetCurrentButton();
 	local text = "";
 	if button then
 		if CursorHasItem() then
@@ -356,57 +358,111 @@ local function LogBridge(dxSign, stage, detail)
 	end
 end
 
-local function BridgeAcross(dxSign)
-	local button = GetCurrentButton();
-	if not button then
-		LogBridge(dxSign, "nofocus", nil);
-		return;
+-- Side state: "bags" = native nav owns the cursor (its panel IS the bags);
+-- "other" = we own navigation over the bank/vendor buttons, because
+-- SmartNavigation's active panel never leaves the bags and would snap the
+-- cursor back on the next native press.
+local ciSide = "bags";
+local ciOtherButton = nil;
+
+local function FrameCenter(frame)
+	if not frame or not frame.GetCenter then return nil, nil; end
+	local ok, x, y = pcall(frame.GetCenter, frame);
+	if ok then return x, y; end
+end
+
+local function OtherCandidates()
+	local out = {};
+	for _, b in ipairs(GetCandidates()) do
+		if not IsBagButton(b) then out[#out + 1] = b; end
 	end
-	local isBag = IsBagButton(button);
-	local isOther = IsBankButton(button)
-		or (MerchantFrame and MerchantFrame:IsShown() and not IsBagButton(button) and not IsBankButton(button));
-	if not (isBag or isOther) then
-		LogBridge(dxSign, "notitem", button:GetName() or "?");
-		return;
+	return out;
+end
+
+-- Geometric nav within the other side, from OUR tracked button (the native
+-- cursor may be anywhere; its position is not trustworthy here).
+local function NavOther(dxWanted, dyWanted)
+	if not ciOtherButton then return; end
+	local cx, cy = FrameCenter(ciOtherButton);
+	if not cx then return; end
+	local best, bestScore;
+	for _, b in ipairs(OtherCandidates()) do
+		local x, y = FrameCenter(b);
+		if x and y then
+			local dx, dy = x - cx, y - cy;
+			local valid, primary, secondary;
+			if dxWanted > 0 then
+				valid = dx > 2;
+				primary, secondary = dx, math.abs(dy);
+			elseif dxWanted < 0 then
+				valid = dx < -2;
+				primary, secondary = -dx, math.abs(dy);
+			elseif dyWanted > 0 then
+				valid = dy > 2;
+				primary, secondary = dy, math.abs(dx);
+			else
+				valid = dy < -2;
+				primary, secondary = -dy, math.abs(dx);
+			end
+			if valid then
+				local score = primary + secondary * 2.4;
+				if not bestScore or score < bestScore then
+					best, bestScore = b, score;
+				end
+			end
+		end
 	end
-	-- Fixed model: bags LEFT, bank/vendor RIGHT. RIGHT crosses bags->bank,
-	-- LEFT crosses bank->bags. Any other direction is a no-op.
-	if (dxSign > 0) ~= isBag then
-		return;
+	if best then
+		ciOtherButton = best;
+		SelectButton(best);
 	end
-	local cx = (button:GetLeft() + button:GetRight()) / 2;
-	-- Edge check against the cached layout model.
-	if isBag then
-		if not layoutBagsRight or cx < layoutBagsRight - 20 then return; end
-	else
-		if not layoutOtherLeft or cx > layoutOtherLeft + 20 then return; end
-	end
-	local cy = GetCenterY(button);
+end
+
+-- Cross back to the bags (row-first, from our tracked bank button).
+local function CrossBackToBags()
+	if not ciOtherButton then return; end
+	local cx = FrameCenter(ciOtherButton);
+	local cy = GetCenterY(ciOtherButton);
 	local target, bestDist;
 	for _, b in ipairs(GetCandidates()) do
-		if IsBagButton(b) ~= isBag then  -- opposite side
-			local by = GetCenterY(b);
-			-- Row-first metric.
-			local d = math.abs(by - cy) * 10 + math.abs((b:GetLeft() + b:GetRight()) / 2 - cx);
-			if not bestDist or d < bestDist then
-				target, bestDist = b, d;
+		if IsBagButton(b) then
+			local bx = FrameCenter(b);
+			if bx then
+				local d = math.abs(GetCenterY(b) - cy) * 10 + math.abs(bx - cx);
+				if not bestDist or d < bestDist then
+					target, bestDist = b, d;
+				end
 			end
 		end
 	end
 	if target then
+		ciSide = "bags";
+		ciOtherButton = nil;
 		SelectButton(target);
-		LogBridge(dxSign, "crossed", ("row=%.1f name=%s"):format(GetCenterY(target), target:GetName() or "?"));
-	else
-		LogBridge(dxSign, "notarget", ("candidates=%d cx=%d"):format(#GetCandidates(), cx));
+		LogBridge(-1, "crossed-back", target:GetName() or "?");
 	end
 end
 
-local function BridgeRight()
-	BridgeAcross(1);
-end
-
-local function BridgeLeft()
-	BridgeAcross(-1);
+-- Cross from the bags' right edge to the other side (row-first).
+local function CrossToOther()
+	local button = GetCurrentButton();
+	if not IsBagButton(button) then return; end
+	local cx = (button:GetLeft() + button:GetRight()) / 2;
+	if not layoutBagsRight or cx < layoutBagsRight - 20 then return; end
+	local cy = GetCenterY(button);
+	local target, bestDist;
+	for _, b in ipairs(OtherCandidates()) do
+		local d = math.abs(GetCenterY(b) - cy) * 10 + math.abs((b:GetLeft() + b:GetRight()) / 2 - cx);
+		if not bestDist or d < bestDist then
+			target, bestDist = b, d;
+		end
+	end
+	if target then
+		ciSide = "other";
+		ciOtherButton = target;
+		SelectButton(target);
+		LogBridge(1, "crossed", target:GetName() or "?");
+	end
 end
 
 local wasActive = false;
@@ -419,6 +475,8 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 		PlaceWindow();
 		CI_UpdatePrompt();
 	elseif not active and wasActive then
+		ciSide = "bags";
+		ciOtherButton = nil;
 		overlay:Hide();
 	end
 	wasActive = active;
@@ -438,10 +496,32 @@ poller:SetScript("OnUpdate", function(self, elapsed)
 				CI_DoX();
 			end
 			if pressed("PADDRIGHT") then
-				BridgeRight();
+				if ciSide == "bags" then
+					CrossToOther();
+				else
+					NavOther(1, 0);
+				end
 			end
 			if pressed("PADDLEFT") then
-				BridgeLeft();
+				if ciSide == "other" then
+					local cx = ciOtherButton and FrameCenter(ciOtherButton);
+					if cx and layoutOtherLeft and cx <= layoutOtherLeft + 20 then
+						CrossBackToBags();
+					else
+						NavOther(-1, 0);
+					end
+				end
+				-- bags side: native nav owns LEFT
+			end
+			if pressed("PADDUP") then
+				if ciSide == "other" then
+					NavOther(0, -1);
+				end
+			end
+			if pressed("PADDDOWN") then
+				if ciSide == "other" then
+					NavOther(0, 1);
+				end
 			end
 		end
 	end
